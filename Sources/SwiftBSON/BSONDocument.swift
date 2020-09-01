@@ -107,12 +107,18 @@ public struct BSONDocument {
         self = BSONDocument(fromUnsafeBSON: storage)
     }
 
+    private init(fromUnsafeBSON bytes: Data) {
+        var buffer = BSON_ALLOCATOR.buffer(capacity: bytes.count)
+        buffer.writeBytes(bytes)
+        let storage = BSONDocumentStorage(buffer)
+        self = BSONDocument(fromUnsafeBSON: storage)
+    }
+
     private init(fromUnsafeBSON storage: BSONDocumentStorage) {
         self.keySet = Set()
         self.storage = storage
-        for (key, _) in self {
-            self.keySet.insert(key)
-        }
+        var iter = self.makeIterator()
+        self.keySet = Set(try! iter.getKeys())
     }
 
     /**
@@ -162,7 +168,10 @@ public struct BSONDocument {
     }
 
     /// The keys in this `BSONDocument`.
-    public var keys: [String] { self.map { key, _ in key } }
+    public var keys: [String] {
+        var iter = self.makeIterator()
+        return try! iter.getKeys()
+    }
 
     /// The values in this `BSONDocument`.
     public var values: [BSON] { self.map { _, val in val } }
@@ -194,10 +203,12 @@ public struct BSONDocument {
      */
     public subscript(key: String) -> BSON? {
         get {
-            for (docKey, value) in self where docKey == key {
-                return value
-            }
-            return nil
+            var iter = self.makeIterator()
+            return try! iter.find(key: key)?.value
+            // for (docKey, value) in self where docKey == key {
+            //     return value
+            // }
+            // return nil
         }
         set {
             // The only time this would crash is document too big error

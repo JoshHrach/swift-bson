@@ -86,6 +86,159 @@ public struct BSONDocumentIterator: IteratorProtocol {
         return (key: key, value: bson)
     }
 
+    internal mutating func skipNextValue(type: BSONType) throws {
+        switch type {
+        case .invalid:
+            throw BSONIterationError(
+                buffer: self.buffer,
+                key: "",
+                type: type,
+                typeByte: type.rawValue,
+                message: "Encountered invalid type byte"
+            )
+        case .undefined, .null, .minKey, .maxKey:
+            // no data stored.
+            break
+        case .bool:
+            self.buffer.moveReaderIndex(forwardBy: 1)
+        case .double, .int64, .timestamp, .datetime:
+            self.buffer.moveReaderIndex(forwardBy: 8)
+        case .objectID:
+            self.buffer.moveReaderIndex(forwardBy: 12)
+        case .int32:
+            self.buffer.moveReaderIndex(forwardBy: 4)
+        case .string, .code, .symbol:
+            let strLength = Int(buffer.readInteger(endianness: .little, as: Int32.self)!)
+            self.buffer.moveReaderIndex(forwardBy: strLength)
+        case .regex:
+            _ = try buffer.readCString()
+            _ = try buffer.readCString()
+        case .binary:
+            let dataLength = Int(buffer.readInteger(endianness: .little, as: Int32.self)!)
+            // +1 for the subtype
+            self.buffer.moveReaderIndex(forwardBy: dataLength + 1)
+        case .document, .array, .codeWithScope:
+            let embeddedDocLength = Int(buffer.readInteger(endianness: .little, as: Int32.self)!)
+            self.buffer.moveReaderIndex(forwardBy: embeddedDocLength - 4)
+        case .dbPointer:
+            // initial string
+            let strLength = Int(buffer.readInteger(endianness: .little, as: Int32.self)!)
+            self.buffer.moveReaderIndex(forwardBy: strLength)
+            // 12 bytes of data
+            self.buffer.moveReaderIndex(forwardBy: 12)
+        case .decimal128:
+            self.buffer.moveReaderIndex(forwardBy: 16)
+        }
+    }
+
+    internal mutating func find(key: String) throws -> BSONDocument.KeyValuePair? {
+        while true {
+            guard self.buffer.readableBytes != 0 else {
+                // Iteration has been exhausted
+                guard self.exhausted else {
+                    throw BSONIterationError(
+                        buffer: self.buffer,
+                        message: "There are no readable bytes remaining but a null terminator was not encountered"
+                    )
+                }
+                return nil
+            }
+
+            guard let typeByte = self.buffer.readInteger(as: UInt8.self) else {
+                throw BSONIterationError(
+                    buffer: self.buffer,
+                    message: "Cannot read type indicator from bson"
+                )
+            }
+
+            guard typeByte != 0 else {
+                // Iteration exhausted after we've read the null terminator (special case)
+                guard self.buffer.readableBytes == 0 else {
+                    throw BSONIterationError(
+                        buffer: self.buffer,
+                        message: "Bytes remain after document iteration exhausted"
+                    )
+                }
+                self.exhausted = true
+                return nil
+            }
+
+
+            guard let type = BSONType(rawValue: typeByte), type != .invalid else {
+                throw BSONIterationError(
+                    buffer: self.buffer,
+                    typeByte: typeByte,
+                    message: "Invalid type indicator"
+                )
+            }
+
+            let foundKey = try self.buffer.readCString()
+            if foundKey == key {
+                guard let bson = try BSON.allBSONTypes[type]?.read(from: &buffer) else {
+                    throw BSONIterationError(
+                        buffer: self.buffer,
+                        key: key,
+                        type: type,
+                        typeByte: typeByte,
+                        message: "Cannot decode type"
+                    )
+                }
+                return (key: key, value: bson)
+            }
+
+            try self.skipNextValue(type: type)
+        }
+    }
+
+    internal mutating func getKeys() throws -> [String] {
+        var keys = [String]()
+
+        while true {
+            guard self.buffer.readableBytes != 0 else {
+                // Iteration has been exhausted
+                guard self.exhausted else {
+                    throw BSONIterationError(
+                        buffer: self.buffer,
+                        message: "There are no readable bytes remaining but a null terminator was not encountered"
+                    )
+                }
+                return keys
+            }
+
+            guard let typeByte = self.buffer.readInteger(as: UInt8.self) else {
+                throw BSONIterationError(
+                    buffer: self.buffer,
+                    message: "Cannot read type indicator from bson"
+                )
+            }
+
+            guard typeByte != 0 else {
+                // Iteration exhausted after we've read the null terminator (special case)
+                guard self.buffer.readableBytes == 0 else {
+                    throw BSONIterationError(
+                        buffer: self.buffer,
+                        message: "Bytes remain after document iteration exhausted"
+                    )
+                }
+                self.exhausted = true
+                return keys
+            }
+
+
+            guard let type = BSONType(rawValue: typeByte), type != .invalid else {
+                throw BSONIterationError(
+                    buffer: self.buffer,
+                    typeByte: typeByte,
+                    message: "Invalid type indicator"
+                )
+            }
+
+            let foundKey = try self.buffer.readCString()
+            keys.append(foundKey)
+            try self.skipNextValue(type: type)
+        }
+    }
+
     /// Finds the key in the underlying buffer, and returns the [startIndex, endIndex) containing the corresponding
     /// element.
     internal mutating func findByteRange(for searchKey: String) -> Range<Int>? {

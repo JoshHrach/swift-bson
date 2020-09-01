@@ -15,6 +15,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "SwiftBSON", dependencies: ["NIO"]),
-        .testTarget(name: "SwiftBSONTests", dependencies: ["SwiftBSON", "Nimble"])
+        .testTarget(name: "SwiftBSONTests", dependencies: ["SwiftBSON", "Nimble"]),
+        .target(name: "PerfTest", dependencies: ["SwiftBSON"])
     ]
 )
