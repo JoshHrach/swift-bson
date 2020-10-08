@@ -144,7 +144,13 @@ public struct BSONDocument {
     }
 
     /// The keys in this `BSONDocument`.
-    public var keys: [String] { self.map { key, _ in key } }
+    public var keys: [String] {
+        do {
+            return try BSONDocumentIterator.getKeys(for: self)
+        } catch {
+            fatalError("Failed to retrieve keys for document")
+        }
+    }
 
     /// The values in this `BSONDocument`.
     public var values: [BSON] { self.map { _, val in val } }
@@ -176,10 +182,11 @@ public struct BSONDocument {
      */
     public subscript(key: String) -> BSON? {
         get {
-            for (docKey, value) in self where docKey == key {
-                return value
+            do {
+                return try BSONDocumentIterator.find(key: key, in: self)?.value
+            } catch {
+                fatalError("Error looking up key \(key) in document: \(error)")
             }
-            return nil
         }
         set {
             // The only time this would crash is document too big error
@@ -280,9 +287,7 @@ public struct BSONDocument {
             return
         }
 
-        let iter = BSONDocumentIterator(over: self.storage.buffer)
-
-        guard let range = iter.findByteRange(for: key) else {
+        guard let range = try BSONDocumentIterator.findByteRange(for: key, in: self) else {
             throw BSONError.InternalError(message: "Cannot find \(key) to delete")
         }
 
